@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fuel Route Planner</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <style>
+    :root { --bg:#f7f7f5; --panel:#fff; --text:#1d1d1b; --muted:#6b6b66; --line:#e3e3de; --accent:#1f6feb; --stop:#d9480f; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#161615; --panel:#1f1f1d; --text:#ecece8; --muted:#a3a39c; --line:#33332f; --accent:#5b9bff; --stop:#ff8a4c; }
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; background:var(--bg); color:var(--text); }
+    .layout { display:grid; grid-template-columns:380px 1fr; height:100vh; }
+    aside { overflow:auto; padding:20px; border-right:1px solid var(--line); background:var(--panel); }
+    #map { height:100%; }
+    h1 { font-size:18px; margin:0 0 12px; }
+    form { display:grid; gap:8px; margin-bottom:16px; }
+    label { font-size:12px; color:var(--muted); }
+    input { width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); font:inherit; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    button { padding:9px; border:0; border-radius:6px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+    .error { padding:10px; border-radius:6px; background:#fde8e8; color:#8a1c1c; }
+    .kpis { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0; }
+    .kpi { border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+    .kpi b { display:block; font-size:18px; }
+    .kpi span { font-size:12px; color:var(--muted); }
+    ol { padding-left:20px; margin:0; }
+    li { margin-bottom:10px; }
+    .muted { color:var(--muted); font-size:12px; }
+    @media (max-width:760px) { .layout { grid-template-columns:1fr; grid-template-rows:auto 60vh; height:auto; } aside { border-right:0; } }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside>
+    <h1>Fuel Route Planner</h1>
+    <form method="get">
+      <div><label for="start">Start</label><input id="start" name="start" required value="{{ query.start|default:'' }}" placeholder="Chicago, IL"></div>
+      <div><label for="finish">Finish</label><input id="finish" name="finish" required value="{{ query.finish|default:'' }}" placeholder="Los Angeles, CA"></div>
+      <div class="row">
+        <div><label for="start_fuel">Start fuel (0–1 tank)</label><input id="start_fuel" name="start_fuel" type="number" step="0.05" min="0" max="1" value="{{ query.start_fuel|default:'0' }}"></div>
+        <div><label for="corridor_miles">Corridor (miles)</label><input id="corridor_miles" name="corridor_miles" type="number" step="0.5" min="0.5" max="25" value="{{ query.corridor_miles|default:'5' }}"></div>
+      </div>
+      <div><label for="stop_penalty">Stop penalty (USD per stop, 0 = cheapest possible)</label><input id="stop_penalty" name="stop_penalty" type="number" step="0.5" min="0" max="100" value="{{ query.stop_penalty|default:'2' }}"></div>
+      <button type="submit">Plan route</button>
+    </form>
+
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+    {% if plan %}
+      <div class="muted">{{ plan.start.label }} → {{ plan.finish.label }}</div>
+      <div class="kpis">
+        <div class="kpi"><b>${{ plan.summary.total_fuel_cost|floatformat:2 }}</b><span>Total fuel cost</span></div>
+        <div class="kpi"><b>{{ plan.route.distance_miles|floatformat:0 }} mi</b><span>{{ plan.route.duration_hours|floatformat:1 }} h driving</span></div>
+        <div class="kpi"><b>{{ plan.summary.number_of_stops }}</b><span>Fuel stops</span></div>
+        <div class="kpi"><b>{{ plan.summary.gallons_purchased|floatformat:1 }} gal</b><span>Purchased (10 mpg)</span></div>
+      </div>
+      <p class="muted">Cheapest possible: ${{ plan.summary.cheapest_possible.total_fuel_cost|floatformat:2 }} with {{ plan.summary.cheapest_possible.number_of_stops }} stops.</p>
+      <ol>
+        {% for s in plan.fuel_stops %}
+          <li><b>{{ s.name }}</b><br>
+            <span class="muted">{{ s.city }}, {{ s.state }} · mile {{ s.route_mile|floatformat:0 }}</span><br>
+            {{ s.gallons|floatformat:1 }} gal × ${{ s.price_per_gallon|floatformat:3 }} = <b>${{ s.cost|floatformat:2 }}</b></li>
+        {% empty %}
+          <li>No fuel needed: the starting fuel covers the trip.</li>
+        {% endfor %}
+      </ol>
+      <p class="muted">{{ plan.meta.external_api_calls }} external API call(s) · {{ plan.meta.elapsed_ms }} ms · cache {{ plan.meta.cache }}</p>
+    {% endif %}
+  </aside>
+  <div id="map"></div>
+</div>
+
+{{ plan.map.geojson|json_script:"plan-geojson" }}
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+  const map = L.map('map').setView([39.5, -98.35], 4);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  const data = JSON.parse(document.getElementById('plan-geojson').textContent);
+  if (data) {
+    const css = getComputedStyle(document.documentElement);
+    const accent = css.getPropertyValue('--accent').trim();
+    const stopColor = css.getPropertyValue('--stop').trim();
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const layer = L.geoJSON(data, {
+      style: { color: accent, weight: 4, opacity: 0.85 },
+      pointToLayer: (f, latlng) => {
+        const p = f.properties;
+        if (p.kind === 'fuel_stop') {
+          return L.marker(latlng, { icon: L.divIcon({ className: '', iconSize: [26, 26],
+            html: `<div style="width:26px;height:26px;border-radius:50%;background:${stopColor};color:#fff;display:grid;place-items:center;font-weight:700;border:2px solid #fff">${p.sequence}</div>` }) });
+        }
+        return L.circleMarker(latlng, { radius: 8, color: '#fff', weight: 2, fillColor: p.kind === 'start' ? '#2f9e44' : '#1d1d1b', fillOpacity: 1 });
+      },
+      onEachFeature: (f, l) => {
+        const p = f.properties;
+        if (p.kind === 'fuel_stop') {
+          l.bindPopup(`<b>${p.sequence}. ${esc(p.name)}</b><br>${esc(p.address)}<br>${esc(p.city)}, ${esc(p.state)}<br>` +
+            `Mile ${p.route_mile} · $${p.price_per_gallon}/gal<br>${p.gallons} gal → <b>$${p.cost}</b>`);
+        } else if (p.kind !== 'route') {
+          l.bindPopup(`<b>${p.kind === 'start' ? 'Start' : 'Finish'}</b><br>${esc(p.label)}`);
+        }
+      }
+    }).addTo(map);
+    map.fitBounds(layer.getBounds(), { padding: [30, 30] });
+  }
+</script>
+</body>
+</html>
