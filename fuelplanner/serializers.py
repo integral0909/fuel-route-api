@@ -27,3 +27,8 @@ class RoutePlanRequestSerializer(serializers.Serializer):
         max_value=100.0,
         help_text="$ per stop; 0 gives the strictly cheapest plan",
     )
+
+
+class ErrorSerializer(serializers.Serializer):
+    error = serializers.CharField(help_text="Machine-readable code, e.g. location_not_found")
+    detail = serializers.JSONField()

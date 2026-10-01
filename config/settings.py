@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "drf_spectacular",
     "fuelplanner",
 ]
 
@@ -152,6 +153,16 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     "UNAUTHENTICATED_USER": None,
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Every uncached plan calls the public OSRM server, so cap per-client usage.
+    "DEFAULT_THROTTLE_RATES": {"route_plan": os.environ.get("ROUTE_PLAN_RATE", "60/min")},
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Fuel Route API",
+    "DESCRIPTION": "Cheapest fuel stops along a US driving route.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
 }
 
 # locmem is fine for one process; use Redis if running several workers.
@@ -169,7 +180,7 @@ LOGGING = {
     "disable_existing_loggers": False,
     "handlers": {"console": {"class": "logging.StreamHandler"}},
     "loggers": {
-        "fuelplanner": {"handlers": ["console"], "level": "INFO"},
+        "fuelplanner": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")},
     },
 }
 
