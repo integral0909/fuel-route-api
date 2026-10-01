@@ -1,0 +1,25 @@
+[project]
+name = "fuel-route-api"
+version = "1.0.0"
+description = "Cheapest fuel stops along a US driving route"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["*/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "DJ", "C4", "PIE", "RET"]
+ignore = ["DJ001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["config", "fuelplanner"]
+
+[tool.coverage.run]
+source = ["fuelplanner"]
+omit = ["*/migrations/*", "*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
