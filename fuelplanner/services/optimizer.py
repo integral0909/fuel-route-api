@@ -18,11 +18,12 @@ FILL, JUST_ENOUGH, START = "fill", "just_enough", "start"
 
 
 class InfeasibleRoute(Exception):
-    def __init__(self, gap_start, gap_end, tank_range):
+    def __init__(self, gap_start, gap_end, tank_range, message=None):
         self.gap_start_mile = gap_start
         self.gap_end_mile = gap_end
         super().__init__(
-            f"No fuel station within {tank_range:.0f} miles between route mile "
+            message
+            or f"No fuel station within {tank_range:.0f} miles between route mile "
             f"{gap_start:.1f} and {gap_end:.1f}."
         )
 
@@ -97,7 +98,12 @@ def plan_fuel_stops(stops, total_miles, tank_range, mpg, start_fuel_miles, stop_
     start_fuel = requested
     if total_miles > start_fuel + EPS:
         if not stops or stops[0].mile > cap + EPS:
-            raise InfeasibleRoute(0.0, stops[0].mile if stops else total_miles, cap)
+            raise InfeasibleRoute(
+                0.0,
+                stops[0].mile if stops else total_miles,
+                cap,
+                _unreachable_start_message(stops, total_miles, cap, requested),
+            )
         start_fuel = max(start_fuel, stops[0].mile)
 
     marks = [s.mile for s in stops] + [total_miles]
@@ -185,3 +191,16 @@ def _build_plan(final, stops, marks, cap, mpg, start_fuel):
         gallons = buy / mpg
         plan.purchases.append(Purchase(stop, gallons, gallons * stop.price, at.fuel / mpg))
     return plan
+
+
+def _unreachable_start_message(stops, total_miles, cap, start_fuel):
+    tank = "starts empty" if start_fuel <= EPS else f"starts with {start_fuel:.0f} miles of range"
+    if not stops:
+        return (
+            f"There's no fuel station on this route, and the tank {tank} "
+            f"for a {total_miles:.1f}-mile trip."
+        )
+    return (
+        f"The first fuel station on the route is at mile {stops[0].mile:.1f}, "
+        f"beyond the {cap:.0f}-mile range from the start."
+    )

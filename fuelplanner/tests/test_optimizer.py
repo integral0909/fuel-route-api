@@ -77,6 +77,20 @@ class OptimizerTests(SimpleTestCase):
         self.assertAlmostEqual(result.start_fuel_miles, 12.0)
         self.assertAlmostEqual(result.total_gallons, 28.8)
 
+    def test_short_route_without_stations_explains_the_empty_tank(self):
+        with self.assertRaises(InfeasibleRoute) as ctx:
+            plan([], total=430)
+        self.assertEqual(
+            str(ctx.exception),
+            "There's no fuel station on this route, and the tank starts empty "
+            "for a 430.0-mile trip.",
+        )
+
+    def test_first_station_out_of_range_says_so(self):
+        with self.assertRaises(InfeasibleRoute) as ctx:
+            plan([(620, 3.0)], total=900)
+        self.assertIn("first fuel station on the route is at mile 620.0", str(ctx.exception))
+
     def test_assumed_start_fuel_is_priced_at_first_station(self):
         # Only station is near the end: the assumed fuel is most of the trip.
         result = plan([(480, 3.0)], total=490, start_fuel=0.0)
