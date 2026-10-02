@@ -361,6 +361,54 @@
       ]
     },
     {
+      "name": "9. Error: no stations in the price data (SF → Portland)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "West Coast routes cross 500+ mile stretches with no station in the price file. The 422 says so, gives the gap, and offers no suggestions because none would work.",
+        "url": {
+          "raw": "{{baseUrl}}/api/route-plan/?start=San Francisco, CA&finish=Portland, OR",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "route-plan",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "San Francisco, CA"
+            },
+            {
+              "key": "finish",
+              "value": "Portland, OR"
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test(\"422 no_feasible_fuel_plan\", () => {",
+              "  pm.response.to.have.status(422);",
+              "  pm.expect(body.error).to.eql(\"no_feasible_fuel_plan\");",
+              "});",
+              "pm.test(\"Reports the gap, suggests nothing that wouldn't work\", () => {",
+              "  pm.expect(body.gap.to_mile - body.gap.from_mile).to.be.above(500);",
+              "  pm.expect(body.suggestions).to.eql([]);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "8. Map page (HTML)",
       "request": {
         "method": "GET",
