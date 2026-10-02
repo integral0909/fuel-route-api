@@ -9,3 +9,4 @@ staticfiles/
 .env
 .coverage
 htmlcov/
+.openapi-check.yml
