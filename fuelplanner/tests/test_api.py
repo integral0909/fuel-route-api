@@ -298,3 +298,26 @@ class ShortRouteTests(TestCase):
         # ~370 mi at 10 mpg priced at that station: about 37 gal * $3.50
         self.assertGreater(summary["total_fuel_cost"], 120)
         self.assertEqual(summary["total_fuel_cost"], summary["assumed_start_fuel"]["cost"])
+
+    def test_map_page_explains_assumed_start_fuel(self):
+        FuelStation.objects.bulk_create([station(1, -97.0, 3.5)])
+        reset_station_index()
+        lon = np.linspace(-104.0, -97.0, 200)
+        resp = mock.Mock(status_code=200)
+        resp.json.return_value = {
+            "code": "Ok",
+            "routes": [
+                {
+                    "distance": 600_000.0,
+                    "duration": 6 * 3600,
+                    "geometry": {
+                        "coordinates": np.column_stack((lon, np.full_like(lon, 40.0))).tolist()
+                    },
+                }
+            ],
+        }
+        with mock.patch("fuelplanner.services.http.requests.Session.get", return_value=resp):
+            page = self.client.get("/map/", {"start": "Denver, CO", "finish": "Salina, KS"})
+        self.assertContains(page, "of start fuel, assumed to reach the first station")
+        self.assertContains(page, "Station 1 (Town, KS")
+        self.assertContains(page, "No stops needed")

@@ -30,6 +30,7 @@
     ol { padding-left:20px; margin:0; }
     li { margin-bottom:10px; }
     .muted { color:var(--muted); font-size:12px; }
+    .note { font-size:12px; padding:8px 10px; border-left:3px solid var(--stop); background:var(--bg); border-radius:4px; }
     @media (max-width:760px) { .layout { grid-template-columns:1fr; grid-template-rows:auto 60vh; height:auto; } aside { border-right:0; } }
   </style>
 </head>
@@ -58,6 +59,9 @@
         <div class="kpi"><b>{{ plan.summary.number_of_stops }}</b><span>Fuel stops</span></div>
         <div class="kpi"><b>{{ plan.summary.gallons_purchased|floatformat:1 }} gal</b><span>Purchased (10 mpg)</span></div>
       </div>
+      {% with assumed=plan.summary.assumed_start_fuel %}{% if assumed %}
+      <p class="note">Includes ${{ assumed.cost|floatformat:2 }} for {{ assumed.gallons|floatformat:1 }} gal of start fuel, assumed to reach the first station on the route and priced at {{ assumed.priced_at.name }} ({{ assumed.priced_at.city }}, {{ assumed.priced_at.state }}, ${{ assumed.price_per_gallon|floatformat:3 }}/gal). Fuel at stops: ${{ plan.summary.fuel_cost_at_stops|floatformat:2 }}.</p>
+      {% endif %}{% endwith %}
       <p class="muted">Cheapest possible: ${{ plan.summary.cheapest_possible.total_fuel_cost|floatformat:2 }} with {{ plan.summary.cheapest_possible.number_of_stops }} stops.</p>
       <ol>
         {% for s in plan.fuel_stops %}
@@ -65,7 +69,7 @@
             <span class="muted">{{ s.city }}, {{ s.state }} · mile {{ s.route_mile|floatformat:0 }}</span><br>
             {{ s.gallons|floatformat:1 }} gal × ${{ s.price_per_gallon|floatformat:3 }} = <b>${{ s.cost|floatformat:2 }}</b></li>
         {% empty %}
-          <li>No fuel needed: the starting fuel covers the trip.</li>
+          <li>No stops needed: the start fuel covers the trip.</li>
         {% endfor %}
       </ol>
       <p class="muted">{{ plan.meta.external_api_calls }} external API call(s) · {{ plan.meta.elapsed_ms }} ms · cache {{ plan.meta.cache }}</p>
