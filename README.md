@@ -31,7 +31,7 @@ No API keys are needed. A Postman collection with assertions on every request is
 ## Development
 
 ```bash
-make test        # 31 tests, HTTP mocked, no network needed
+make test        # 36 tests, HTTP mocked, no network needed
 make coverage
 make lint        # ruff check + format check
 make check       # lint + tests + migration drift + OpenAPI schema validation (what CI runs)
@@ -87,13 +87,16 @@ curl -X POST http://127.0.0.1:8000/api/route-plan/ \
     // ... 9 stops in total
   ],
   "summary": {
-    "total_fuel_cost": 859.48,
+    "total_fuel_cost": 862.32,
+    "fuel_cost_at_stops": 859.48,
+    "assumed_start_fuel": {"gallons": 0.88, "price_per_gallon": 3.239, "cost": 2.84,
+                           "priced_at": {"opis_id": 72087, "name": "DELTA", "city": "Jersey City", "state": "NJ"}},
     "gallons_purchased": 280.16,
     "gallons_used": 281.04,
     "number_of_stops": 9,
     "average_price_paid": 3.0678,
     "stations_considered": 349,
-    "cheapest_possible": {"total_fuel_cost": 856.71, "number_of_stops": 18}
+    "cheapest_possible": {"total_fuel_cost": 859.55, "number_of_stops": 18}
   },
   "assumptions": {"mpg": 10.0, "tank_range_miles": 500.0, "tank_capacity_gallons": 50.0,
                   "start_fuel_gallons": 0.88, "arrival_fuel_gallons": 0.0,
@@ -116,7 +119,7 @@ The map is returned in two forms:
 |--------|---------------------------------------------|------|
 | 400    | `invalid_request`                           | A parameter is missing or out of range |
 | 400    | `location_not_found`, `location_outside_usa` | The location can't be found, or it is outside the USA (for example `"Toronto, ON"` or `"51.5,-0.1"`) |
-| 422    | `no_route`, `no_feasible_fuel_plan`         | No drivable route, or a gap longer than 500 miles with no station in the corridor |
+| 422    | `no_route`, `no_feasible_fuel_plan`         | No drivable route, or a stretch longer than 500 miles with no station in the corridor. The response includes the `gap` (route miles) and `suggestions`: settings that were checked to produce a plan (`start_fuel=1` or a wider `corridor_miles`). An empty list means the price data simply has no stations there |
 | 429    | (DRF throttle)                              | More than `ROUTE_PLAN_RATE` requests from one client |
 | 502    | `routing_unavailable`                       | The routing or geocoding API is down |
 
@@ -141,15 +144,15 @@ The price file has no coordinates. `python manage.py build_station_dataset` prep
 
 1. It removes non-US rows (Canadian provinces).
 2. It merges duplicate OPIS ids, keeping the lowest listed price.
-3. It geocodes each station's city: first from the Census gazetteer's places and county subdivisions (96% match), then from Nominatim for the remaining ~150 hamlets, at 1 request per second with results cached on disk.
+3. It geocodes each station's city: first from the Census gazetteer's places and county subdivisions (96.9% of stations), then from Nominatim for the remaining 145 places (205 stations), at 1 request per second with results cached on disk.
 
 The output, `data/fuel_stations.csv`, is committed, so you don't need to run this command.
 
 ## Assumptions and limitations
 
-- **Start fuel.** By default the vehicle departs empty. It is assumed to have just enough fuel to reach the first station in the corridor, and `assumptions.start_fuel_gallons` reports how much that is. `total_fuel_cost` is the money spent at the recommended stops. Pass `start_fuel=1` to depart with a full tank.
+- **Start fuel.** By default the vehicle departs empty, so it is assumed to carry just enough fuel to reach the first station on the route. That fuel is priced at that station and shown in `summary.assumed_start_fuel`; `total_fuel_cost` is the spend at the stops plus that amount (`fuel_cost_at_stops` is the stops alone). Fuel you declare with `start_fuel` (a fraction of the tank) is treated as already paid for.
 - **Station positions are approximate.** Stations are placed at their city's centre point, because the file gives addresses like "I-44, EXIT 283" rather than coordinates. `route_mile` and `distance_from_route_miles` are therefore approximate. Widen `corridor_miles` if the route passes near a big city whose centre is far from the highway.
-- **Station coverage.** Coverage follows the price file. California, for example, has only 16 stations, so a trip that starts in California may have its first station hundreds of miles away. The empty-start assumption then covers that stretch, and `start_fuel_gallons` shows by how much.
+- **Station coverage.** Coverage follows the price file, which is thin in places. California has 8 stations (16 rows) and all of them are in the Imperial/Coachella Valley near the Mexican border: Los Angeles is ~120 mi from the nearest one, San Francisco ~165 mi, Sacramento ~100 mi. As a result, routes along the West Coast such as San Francisco → Portland or Seattle → San Diego cannot be planned at any setting (there are 500+ mile stretches with no station), and Los Angeles → San Francisco only works when starting with a full tank (`start_fuel=1`). The API returns a 422 that says so rather than suggesting settings that wouldn't help.
 - **Detours.** The cost of driving off the route to reach a station is not added. The corridor limit keeps these detours small.
 - **Public APIs.** The public OSRM and Nominatim servers are free but rate-limited. For production, point `OSRM_BASE_URL` and `NOMINATIM_URL` at self-hosted instances.
 
