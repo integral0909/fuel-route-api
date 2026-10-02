@@ -2,6 +2,10 @@ class PlannerError(Exception):
     status_code = 400
     code = "planner_error"
 
+    def __init__(self, message, **extra):
+        super().__init__(message)
+        self.extra = extra  # structured context merged into the error response
+
 
 class LocationNotFound(PlannerError):
     code = "location_not_found"

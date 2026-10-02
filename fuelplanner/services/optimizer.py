@@ -47,10 +47,30 @@ class FuelPlan:
     purchases: list = field(default_factory=list)
     start_fuel_miles: float = 0.0
     arrival_fuel_gallons: float = 0.0
+    # Range we had to assume beyond the requested start fuel, priced at the first
+    # station on the route (the one the driver would otherwise have filled at).
+    assumed_fuel_miles: float = 0.0
+    assumed_fuel_stop: Stop | None = None
+    mpg: float = 1.0
 
     @property
     def total_cost(self):
+        """Spend at the recommended stops only."""
         return sum(p.cost for p in self.purchases)
+
+    @property
+    def assumed_fuel_gallons(self):
+        return self.assumed_fuel_miles / self.mpg
+
+    @property
+    def assumed_fuel_cost(self):
+        if not self.assumed_fuel_stop:
+            return 0.0
+        return self.assumed_fuel_gallons * self.assumed_fuel_stop.price
+
+    @property
+    def trip_cost(self):
+        return self.total_cost + self.assumed_fuel_cost
 
     @property
     def total_gallons(self):
@@ -71,8 +91,10 @@ def plan_fuel_stops(stops, total_miles, tank_range, mpg, start_fuel_miles, stop_
     cap = tank_range
 
     # Leaving with less fuel than it takes to reach the first station can't
-    # work, so assume just enough to get there. planner.py reports this.
-    start_fuel = min(max(start_fuel_miles, 0.0), cap)
+    # work, so assume just enough to get there. That fuel isn't free: it's
+    # priced at the first station (see FuelPlan.assumed_fuel_cost).
+    requested = min(max(start_fuel_miles, 0.0), cap)
+    start_fuel = requested
     if total_miles > start_fuel + EPS:
         if not stops or stops[0].mile > cap + EPS:
             raise InfeasibleRoute(0.0, stops[0].mile if stops else total_miles, cap)
@@ -136,7 +158,11 @@ def plan_fuel_stops(stops, total_miles, tank_range, mpg, start_fuel_miles, stop_
         # shouldn't happen after the gap check above
         raise InfeasibleRoute(0.0, total_miles, cap)
     best_final = min(finals, key=lambda s: s.cost)
-    return _build_plan(best_final, stops, marks, cap, mpg, start_fuel)
+    plan = _build_plan(best_final, stops, marks, cap, mpg, start_fuel)
+    if start_fuel > requested + EPS:
+        plan.assumed_fuel_miles = start_fuel - requested
+        plan.assumed_fuel_stop = stops[0]
+    return plan
 
 
 def _build_plan(final, stops, marks, cap, mpg, start_fuel):
@@ -146,7 +172,7 @@ def _build_plan(final, stops, marks, cap, mpg, start_fuel):
         chain.append(s)
         s = s.parent
 
-    plan = FuelPlan(start_fuel_miles=start_fuel, arrival_fuel_gallons=final.fuel / mpg)
+    plan = FuelPlan(start_fuel_miles=start_fuel, arrival_fuel_gallons=final.fuel / mpg, mpg=mpg)
     for arrival in reversed(chain):
         at = arrival.parent
         stop = stops[at.node]

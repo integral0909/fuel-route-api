@@ -95,7 +95,13 @@ class RoutePlanApiTests(TestCase):
         self.assertIn(4, ids)  # cheapest reachable station
         summary = body["summary"]
         self.assertAlmostEqual(
-            summary["total_fuel_cost"], sum(s["cost"] for s in body["fuel_stops"]), places=1
+            summary["fuel_cost_at_stops"], sum(s["cost"] for s in body["fuel_stops"]), places=1
+        )
+        # Station 1 is a few miles in; the fuel to get there is priced at its pump.
+        assumed = summary["assumed_start_fuel"]
+        self.assertEqual(assumed["priced_at"]["opis_id"], 1)
+        self.assertAlmostEqual(
+            summary["total_fuel_cost"], summary["fuel_cost_at_stops"] + assumed["cost"], places=1
         )
         self.assertAlmostEqual(summary["gallons_used"], 99.4, places=1)
 
@@ -152,12 +158,24 @@ class RoutePlanApiTests(TestCase):
         self.assertEqual(second.json()["error"], "location_not_found")
         self.assertEqual(http_get.call_count, 1)
 
-    def test_route_with_no_stations_in_range_is_422(self):
+    def test_data_gap_is_422_without_misleading_suggestions(self):
         FuelStation.objects.filter(opis_id__in=[3, 4, 5]).delete()
+        reset_station_index()
+        response, _ = self._get(start="Denver, CO", finish="Indianapolis, IN", corridor_miles=25)
+        self.assertEqual(response.status_code, 422)
+        body = response.json()
+        self.assertEqual(body["error"], "no_feasible_fuel_plan")
+        self.assertEqual(body["suggestions"], [])
+        self.assertIn("no stations along that stretch", body["detail"])
+        self.assertLess(body["gap"]["from_mile"], body["gap"]["to_mile"])
+
+    def test_gap_closed_by_wider_corridor_suggests_it(self):
+        FuelStation.objects.filter(opis_id__in=[3, 4, 5]).delete()
+        FuelStation.objects.bulk_create([station(7, -94.5, 3.0, lat=40.2)])  # ~14 mi off route
         reset_station_index()
         response, _ = self._get(start="Denver, CO", finish="Indianapolis, IN")
         self.assertEqual(response.status_code, 422)
-        self.assertEqual(response.json()["error"], "no_feasible_fuel_plan")
+        self.assertEqual(response.json()["suggestions"], [{"corridor_miles": 25.0}])
 
     def test_html_map_renders(self):
         with mock.patch(
@@ -233,3 +251,50 @@ class ExternalFailureTests(TestCase):
                 )
                 self.assertEqual(response.status_code, 422)
         self.assertEqual(session.return_value.get.call_count, 1)
+
+
+@override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
+class ShortRouteTests(TestCase):
+    """~370 mi route (Denver-ish to central Kansas), shorter than one tank."""
+
+    def setUp(self):
+        cache.clear()
+        reset_station_index()
+
+    def tearDown(self):
+        reset_station_index()
+
+    def _get(self, **params):
+        lon = np.linspace(-104.0, -97.0, 200)
+        resp = mock.Mock(status_code=200)
+        resp.json.return_value = {
+            "code": "Ok",
+            "routes": [
+                {
+                    "distance": 600_000.0,
+                    "duration": 6 * 3600,
+                    "geometry": {
+                        "coordinates": np.column_stack((lon, np.full_like(lon, 40.0))).tolist()
+                    },
+                }
+            ],
+        }
+        params = {"start": "Denver, CO", "finish": "Salina, KS", **params}
+        with mock.patch("fuelplanner.services.http.requests.Session.get", return_value=resp):
+            return self.client.get("/api/route-plan/", params)
+
+    def test_no_stations_on_short_route_suggests_full_tank(self):
+        response = self._get()
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["suggestions"], [{"start_fuel": 1.0}])
+        self.assertEqual(self._get(start_fuel=1).status_code, 200)
+
+    def test_station_only_near_destination_is_not_a_free_trip(self):
+        FuelStation.objects.bulk_create([station(1, -97.0, 3.5)])  # at the destination, like Reno
+        reset_station_index()
+        summary = self._get().json()["summary"]
+        self.assertEqual(summary["number_of_stops"], 0)
+        self.assertEqual(summary["fuel_cost_at_stops"], 0)
+        # ~370 mi at 10 mpg priced at that station: about 37 gal * $3.50
+        self.assertGreater(summary["total_fuel_cost"], 120)
+        self.assertEqual(summary["total_fuel_cost"], summary["assumed_start_fuel"]["cost"])

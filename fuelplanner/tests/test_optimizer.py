@@ -77,6 +77,19 @@ class OptimizerTests(SimpleTestCase):
         self.assertAlmostEqual(result.start_fuel_miles, 12.0)
         self.assertAlmostEqual(result.total_gallons, 28.8)
 
+    def test_assumed_start_fuel_is_priced_at_first_station(self):
+        # Only station is near the end: the assumed fuel is most of the trip.
+        result = plan([(480, 3.0)], total=490, start_fuel=0.0)
+        self.assertAlmostEqual(result.assumed_fuel_gallons, 48.0)
+        self.assertAlmostEqual(result.assumed_fuel_cost, 144.0)
+        self.assertAlmostEqual(result.total_cost, 3.0)  # 1 gal bought at the stop
+        self.assertAlmostEqual(result.trip_cost, 147.0)
+
+    def test_declared_start_fuel_is_not_priced(self):
+        result = plan([(100, 3.0)], total=400, start_fuel=RANGE)
+        self.assertIsNone(result.assumed_fuel_stop)
+        self.assertEqual(result.trip_cost, 0.0)
+
     def test_stop_penalty_skips_micro_top_ups(self):
         # A station a hair cheaper 20 miles on: the pure optimum stops twice.
         stops = [(0, 3.10), (20, 3.09)]

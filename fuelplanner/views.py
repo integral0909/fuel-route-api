@@ -70,7 +70,7 @@ class RoutePlanView(APIView):
         try:
             result = run_plan(data)
         except PlannerError as e:
-            return Response({"error": e.code, "detail": str(e)}, status=e.status_code)
+            return Response({"error": e.code, "detail": str(e), **e.extra}, status=e.status_code)
 
         query = {"start": data["start"], "finish": data["finish"], "start_fuel": data["start_fuel"]}
         query.update({k: data[k] for k in OPTIONAL_PARAMS if data[k] is not None})

@@ -49,25 +49,12 @@ def plan_trip(start, finish, start_fuel_fraction=0.0, corridor_miles=None, stop_
     route = fetch_route(origin.lat, origin.lon, dest.lat, dest.lon, calls)
     index = get_station_index()
     nearby = stations_along_route(route.lat, route.lon, route.distance_miles, index, corridor)
-    candidates = [Stop(key=s, mile=s.route_mile, price=s.price) for s in nearby]
-
-    def optimize(stop_penalty):
-        return plan_fuel_stops(
-            candidates,
-            route.distance_miles,
-            tank_range,
-            mpg,
-            start_fuel_fraction * tank_range,
-            stop_penalty,
-        )
 
     try:
-        plan = optimize(penalty)
-        cheapest = optimize(0.0) if penalty > 0 else plan
+        plan = _optimize(route, nearby, start_fuel_fraction, penalty)
+        cheapest = _optimize(route, nearby, start_fuel_fraction, 0.0) if penalty > 0 else plan
     except InfeasibleRoute as exc:
-        raise NoFeasibleFuelPlan(
-            f"{exc} Try a wider corridor_miles (currently {corridor})."
-        ) from exc
+        raise _no_plan_error(exc, route, index, corridor, start_fuel_fraction) from exc
 
     stops = [_stop_json(n, p, index) for n, p in enumerate(plan.purchases, start=1)]
     result = {
@@ -79,7 +66,9 @@ def plan_trip(start, finish, start_fuel_fraction=0.0, corridor_miles=None, stop_
         },
         "fuel_stops": stops,
         "summary": {
-            "total_fuel_cost": round(plan.total_cost, 2),
+            "total_fuel_cost": round(plan.trip_cost, 2),
+            "fuel_cost_at_stops": round(plan.total_cost, 2),
+            "assumed_start_fuel": _assumed_fuel_json(plan, index),
             "gallons_purchased": round(plan.total_gallons, 2),
             "gallons_used": round(route.distance_miles / mpg, 2),
             "number_of_stops": len(stops),
@@ -88,7 +77,7 @@ def plan_trip(start, finish, start_fuel_fraction=0.0, corridor_miles=None, stop_
             else None,
             "stations_considered": len(nearby),
             "cheapest_possible": {
-                "total_fuel_cost": round(cheapest.total_cost, 2),
+                "total_fuel_cost": round(cheapest.trip_cost, 2),
                 "number_of_stops": len(cheapest.purchases),
             },
         },
@@ -100,7 +89,7 @@ def plan_trip(start, finish, start_fuel_fraction=0.0, corridor_miles=None, stop_
             "arrival_fuel_gallons": round(plan.arrival_fuel_gallons, 2),
             "corridor_miles": corridor,
             "stop_penalty_usd": penalty,
-            "notes": _notes(start_fuel_fraction * tank_range, plan.start_fuel_miles),
+            "notes": _notes(plan),
         },
         "map": {"geojson": _geojson(route, origin, dest, stops)},
         "meta": {
@@ -117,11 +106,74 @@ def plan_trip(start, finish, start_fuel_fraction=0.0, corridor_miles=None, stop_
         dest.label,
         route.distance_miles,
         len(stops),
-        plan.total_cost,
+        plan.trip_cost,
         len(calls),
         result["meta"]["elapsed_ms"],
     )
     return result
+
+
+def _optimize(route, nearby, start_fuel_fraction, stop_penalty):
+    cfg = settings.FUEL_PLANNER
+    return plan_fuel_stops(
+        [Stop(key=s, mile=s.route_mile, price=s.price) for s in nearby],
+        route.distance_miles,
+        cfg["VEHICLE_RANGE_MILES"],
+        cfg["VEHICLE_MPG"],
+        start_fuel_fraction * cfg["VEHICLE_RANGE_MILES"],
+        stop_penalty,
+    )
+
+
+def _feasible(route, index, corridor, start_fuel_fraction):
+    nearby = stations_along_route(route.lat, route.lon, route.distance_miles, index, corridor)
+    try:
+        _optimize(route, nearby, start_fuel_fraction, 0.0)
+    except InfeasibleRoute:
+        return False
+    return True
+
+
+def _no_plan_error(exc, route, index, corridor, start_fuel_fraction):
+    # Only suggest changes we've checked would actually produce a plan; much of the
+    # West Coast has no stations in the price file, and no setting fixes that.
+    cfg = settings.FUEL_PLANNER
+    max_corridor = cfg["MAX_CORRIDOR_MILES"]
+    suggestions = []
+    if start_fuel_fraction < 1 and _feasible(route, index, corridor, 1.0):
+        suggestions.append({"start_fuel": 1.0})
+    if corridor < max_corridor and _feasible(route, index, max_corridor, start_fuel_fraction):
+        suggestions.append({"corridor_miles": max_corridor})
+
+    if suggestions:
+        hint = (
+            "This works with "
+            + " or ".join(", ".join(f"{k}={v:g}" for k, v in s.items()) for s in suggestions)
+            + "."
+        )
+    else:
+        hint = (
+            "The fuel price data has no stations along that stretch, so this route can't be "
+            f"planned with a {cfg['VEHICLE_RANGE_MILES']:.0f}-mile range."
+        )
+    return NoFeasibleFuelPlan(
+        f"{exc} {hint}",
+        gap={"from_mile": round(exc.gap_start_mile, 1), "to_mile": round(exc.gap_end_mile, 1)},
+        suggestions=suggestions,
+    )
+
+
+def _assumed_fuel_json(plan, index):
+    if not plan.assumed_fuel_stop:
+        return None
+    station = plan.assumed_fuel_stop.key
+    rec = index.records[station.index]
+    return {
+        "gallons": round(plan.assumed_fuel_gallons, 2),
+        "price_per_gallon": round(station.price, 4),
+        "cost": round(plan.assumed_fuel_cost, 2),
+        "priced_at": {k: rec[k] for k in ("opis_id", "name", "city", "state")},
+    }
 
 
 def _ms_since(t0):
@@ -149,20 +201,20 @@ def _stop_json(seq, purchase, index):
     }
 
 
-def _notes(requested_start_miles, actual_start_miles):
+def _notes(plan):
     notes = [
-        "total_fuel_cost is what is spent at the stops; "
-        "fuel in the tank at departure isn't priced.",
+        "total_fuel_cost = fuel_cost_at_stops + assumed_start_fuel.cost. Fuel you declared "
+        "with start_fuel isn't priced.",
         "Stations are geocoded to their city, "
         "so route_mile and distance_from_route_miles are approximate.",
         "Where the price file lists a station more than once, its lowest price is used.",
         "Stops minimise fuel cost + stop_penalty_usd per stop. summary.cheapest_possible is the "
         "plan with no penalty.",
     ]
-    if actual_start_miles > requested_start_miles + 1e-6:
+    if plan.assumed_fuel_stop:
         notes.append(
-            f"Start fuel was too low to reach a station; assumed {actual_start_miles:.1f} "
-            "miles of range to get to the first stop."
+            f"Start fuel was too low to reach a station, so {plan.assumed_fuel_gallons:.2f} gal "
+            "more was assumed, priced at the first station on the route."
         )
     return notes
 
